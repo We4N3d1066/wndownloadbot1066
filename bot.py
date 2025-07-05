@@ -11,7 +11,6 @@ import shutil
 import subprocess
 
 init(autoreset=True)
-bot = telebot.TeleBot("7303743486:AAGJBwniF5dLEwF027NuoN8Vk-IPEAFDUAs")  
 
 user_mode = {}
 
