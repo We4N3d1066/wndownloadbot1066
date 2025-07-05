@@ -1,8 +1,7 @@
 services:
-  - type: worker
-    name: tg-bot
+  - type: web
+    name: wndownloadbot
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python bot.py"
-    envVars:
-      - fromDotEnv: true
+    plan: free
