@@ -9,8 +9,15 @@ import tempfile
 import os
 import shutil
 import subprocess
+from dotenv import load_dotenv
 
-init(autoreset=True)
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+
+bot = telebot.TeleBot
+
+init(autoreset=True)  
 
 user_mode = {}
 
@@ -74,7 +81,8 @@ def download_youtube_video(url, format_id, bot=None, user_id=None, progress_mess
             'http_chunk_size': 10485760,
             'noprogress': True,
             'no_warnings': True,
-            'nocheckcertificate': True
+            'nocheckcertificate': True,
+            'cookiefile': os.path.join(os.path.dirname(__file__), 'cookies.txt')
         }
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -93,7 +101,8 @@ def get_youtube_info_ydl(url):
         'noprogress': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'retries': 2
+        'retries': 2,
+        'cookiefile': os.path.join(os.path.dirname(__file__), 'cookies.txt')
     }
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
