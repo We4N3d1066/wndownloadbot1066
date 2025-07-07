@@ -134,13 +134,14 @@ def get_youtube_info_ydl(url):
     # Проверяем существование файла cookies
     cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
     ydl_opts = {
-        'quiet': False,
-        'verbose': True,
+        'quiet': True,  # Убираем debug вывод
+        'verbose': False,  # Отключаем verbose
         'skip_download': True,
         'noprogress': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'retries': 2,
+        'retries': 3,  # Увеличиваем попытки
+        'extractor_retries': 3,  # Добавляем повторы экстрактора
     }
     
     # Добавляем cookies только если файл существует
@@ -290,6 +291,14 @@ def download_instagram_video_ydl(url):
             'outtmpl': outtmpl,
             'quiet': True,
             'noplaylist': True,
+            'retries': 3,
+            'extractor_retries': 3,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            # Добавляем user-agent для Instagram
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
         }
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -299,6 +308,18 @@ def download_instagram_video_ydl(url):
         print(Fore.RED + "❌ Ошибка: файл .mp4 не найден в папке.")
     except Exception as e:
         print(Fore.RED + f"❌ Ошибка при скачивании Instagram через yt_dlp: {e}")
+        # Анализируем ошибку и даем понятное сообщение
+        error_str = str(e).lower()
+        if "login required" in error_str or "cookies" in error_str:
+            print(Fore.YELLOW + "⚠️ Instagram: требуется авторизация")
+        elif "rate-limit" in error_str or "rate limit" in error_str:
+            print(Fore.YELLOW + "⚠️ Instagram: превышен лимит запросов")
+        elif "private" in error_str:
+            print(Fore.YELLOW + "⚠️ Instagram: аккаунт приватный")
+        elif "unavailable" in error_str or "not available" in error_str:
+            print(Fore.YELLOW + "⚠️ Instagram: контент недоступен")
+        else:
+            print(Fore.YELLOW + f"⚠️ Instagram: общая ошибка - {e}")
     return None
 
 def log_download(log_path, user, username, user_id, url):
@@ -481,15 +502,32 @@ def handle_message(message):
         try:
             info = get_youtube_info_ydl(url)
 
-
             if not info:
-                bot.send_message(user_id, "❌ Видео недоступно. Возможно, оно приватное или требует авторизацию.")
+                bot.send_message(user_id, 
+                    "❌ Видео недоступно.\n\n"
+                    "🔸 Возможные причины:\n"
+                    "• Видео заблокировано в регионе сервера\n"
+                    "• Видео приватное или удалено\n"
+                    "• Требуется авторизация\n"
+                    "• Ограничения YouTube\n\n"
+                    "💡 Попробуйте другое видео или используйте TikTok/Instagram."
+                )
                 return
 
             user_mode[user_id] = {"mode": "youtube", "url": url, "info": info}
             generate_video_card(info, user_id)
         except Exception as e:
-            bot.send_message(user_id,  "❌ Не удалось получить информацию о видео.")
+            error_msg = str(e)
+            if "Video unavailable" in error_msg:
+                bot.send_message(user_id, 
+                    "❌ Видео недоступно в регионе сервера.\n\n"
+                    "🌍 Сервер находится в другой стране и не может получить доступ к этому видео.\n"
+                    "💡 Попробуйте другое видео или используйте TikTok/Instagram."
+                )
+            elif "Private video" in error_msg:
+                bot.send_message(user_id, "❌ Это приватное видео. Доступ запрещен.")
+            else:
+                bot.send_message(user_id, "❌ Не удалось получить информацию о видео. Попробуйте другое.")
             print(Fore.RED + f"Ошибка YouTube: {e}")
         finally:
             try:
@@ -648,12 +686,24 @@ def extract_mp3_from_video(video_path, mp3_path):
     return os.path.exists(mp3_path)
 
 def cleanup_temp_files(video_path, mp3_path=None):
-    if video_path and os.path.exists(video_path):
-        os.remove(video_path)
-    if mp3_path and os.path.exists(mp3_path):
-        os.remove(mp3_path)
-    temp_dir = os.path.dirname(video_path)
-    shutil.rmtree(temp_dir, ignore_errors=True)
+    """Безопасная очистка временных файлов"""
+    try:
+        if video_path and os.path.exists(video_path):
+            os.remove(video_path)
+            # Получаем директорию только если video_path не None
+            temp_dir = os.path.dirname(video_path)
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        if mp3_path and os.path.exists(mp3_path):
+            os.remove(mp3_path)
+            # Если mp3_path в другой директории
+            mp3_dir = os.path.dirname(mp3_path)
+            if mp3_dir != os.path.dirname(video_path or "") and os.path.exists(mp3_dir):
+                shutil.rmtree(mp3_dir, ignore_errors=True)
+    except Exception as e:
+        print(Fore.YELLOW + f"⚠️ Ошибка при очистке временных файлов: {e}")
+        # Не критично, продолжаем работу
 
 def process_tiktok_instagram(bot, user_id, url, reply_to_message_id=None, is_tiktok=True, log_func=None, user_info=None):
     import time
@@ -687,10 +737,19 @@ def process_tiktok_instagram(bot, user_id, url, reply_to_message_id=None, is_tik
                 for chunk in response.iter_content(chunk_size=10 * 1024 * 1024):
                     f.write(chunk)
         else:
+            # Instagram обработка
             video_path = download_instagram_video_ydl(url)
             if not video_path:
                 if bot:
-                    msg = "❌ Не удалось получить видео. Возможно оно удалено, приватное или не поддерживается."
+                    msg = (
+                        "❌ Instagram: Не удалось скачать видео.\n\n"
+                        "🔸 Возможные причины:\n"
+                        "• Требуется авторизация в Instagram\n"
+                        "• Аккаунт или пост приватный\n"
+                        "• Достигнут лимит запросов\n"
+                        "• Контент защищен от скачивания\n\n"
+                        "💡 Попробуйте TikTok или YouTube вместо этого."
+                    )
                     if not reply_to_message_id:
                         bot.send_message(user_id, msg)
                     else:
@@ -698,7 +757,25 @@ def process_tiktok_instagram(bot, user_id, url, reply_to_message_id=None, is_tik
                             bot.reply_to(user_info, msg)
                         else:
                             bot.send_message(user_id, msg)
+                # Очищаем временную папку и выходим
+                cleanup_temp_files(None, None)
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
                 return
+                
+        # Проверяем, что video_path существует перед отправкой
+        if not video_path or not os.path.exists(video_path):
+            if bot:
+                msg = "❌ Файл видео не найден после скачивания."
+                if not reply_to_message_id:
+                    bot.send_message(user_id, msg)
+                else:
+                    if user_info:
+                        bot.reply_to(user_info, msg)
+                    else:
+                        bot.send_message(user_id, msg)
+            return
+            
         with open(video_path, "rb") as video_bytes:
             if not reply_to_message_id:
                 bot.send_video(user_id, video_bytes, timeout=60, caption="🤖 Бот: @wndownloadbot")
