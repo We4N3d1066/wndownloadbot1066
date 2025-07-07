@@ -904,15 +904,27 @@ def group_tiktok_instagram_handler(message):
         return
 
 if __name__ == "__main__":
+    # Проверяем наличие токена
+    if not BOT_TOKEN:
+        print(Fore.RED + "❌ ОШИБКА: BOT_TOKEN не найден в переменных окружения!")
+        print(Fore.YELLOW + "Добавьте BOT_TOKEN в Environment на Render.com")
+        exit(1)
+    
     try:
         # Запускаем health check сервер в отдельном потоке для Render.com
         health_thread = threading.Thread(target=start_health_server, daemon=True)
         health_thread.start()
         
         print(Fore.GREEN + "✅ Бот запущен и ждёт сообщений... 🧐")
+        print(Fore.CYAN + f"🔗 Health check доступен на порту {os.environ.get('PORT', 10000)}")
+        
         bot.polling(none_stop=True, timeout=90, long_polling_timeout=60)
     except KeyboardInterrupt:
         print(Fore.RED + "\n⛔ Бот остановлен вручную (Ctrl + C)")
+    except Exception as e:
+        print(Fore.RED + f"\n❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         print(Fore.YELLOW + "👋 Бот завершил работу. До встречи!" + Style.RESET_ALL)
         import time
