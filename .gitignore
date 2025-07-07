@@ -1,1 +1,46 @@
+# Переменные окружения
 .env
+
+# Файлы Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Временные файлы
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Логи
+*.log
+
+# Cookies (для безопасности на сервере)
+# cookies.txt
+
+# IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS файлы
+.DS_Store
+Thumbs.db

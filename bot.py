@@ -10,6 +10,8 @@ import os
 import shutil
 import subprocess
 from dotenv import load_dotenv
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -17,6 +19,28 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
 init(autoreset=True)  
+
+# Простой HTTP сервер для health check на Render
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass  # Отключаем логирование HTTP запросов
+
+def start_health_server():
+    """Запускает HTTP сервер для health check"""
+    port = int(os.environ.get('PORT', 10000))
+    httpd = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(Fore.GREEN + f"✅ Health check сервер запущен на порту {port}")
+    httpd.serve_forever()  
 
 user_mode = {}
 
@@ -65,6 +89,9 @@ def download_youtube_video(url, format_id, bot=None, user_id=None, progress_mess
                     pass
                 print()  
         ydl_format = f"{format_id}+bestaudio/best"
+        
+        # Проверяем существование файла cookies
+        cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
         ydl_opts = {
             'format': ydl_format,
             'outtmpl': outtmpl,
@@ -81,7 +108,17 @@ def download_youtube_video(url, format_id, bot=None, user_id=None, progress_mess
             'noprogress': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            'cookiefile': os.path.join(os.path.dirname(__file__), 'cookies.txt')
+        }
+        
+        # Добавляем cookies только если файл существует
+        if os.path.exists(cookies_path):
+            ydl_opts['cookiefile'] = cookies_path
+        else:
+            print(Fore.YELLOW + f"⚠️ Файл cookies.txt не найден: {cookies_path}")
+            
+        # Добавляем user-agent для обхода блокировок
+        ydl_opts['http_headers'] = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -94,15 +131,36 @@ def download_youtube_video(url, format_id, bot=None, user_id=None, progress_mess
     return None
 
 def get_youtube_info_ydl(url):
+    # Проверяем существование файла cookies
+    cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
     ydl_opts = {
-        'quiet': True,
+        'quiet': False,
+        'verbose': True,
         'skip_download': True,
         'noprogress': True,
         'no_warnings': True,
         'nocheckcertificate': True,
         'retries': 2,
-        'cookiefile': os.path.join(os.path.dirname(__file__), 'cookies.txt')
     }
+    
+    # Добавляем cookies только если файл существует
+    if os.path.exists(cookies_path):
+        ydl_opts['cookiefile'] = cookies_path
+    else:
+        print(Fore.YELLOW + f"⚠️ Файл cookies.txt не найден: {cookies_path}")
+        
+    # Добавляем user-agent для обхода блокировок
+    ydl_opts['http_headers'] = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(Fore.RED + f"❌ Ошибка YouTube: {e}")
+        return None  
+
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
     video_info = {
@@ -422,6 +480,12 @@ def handle_message(message):
         status_msg = bot.send_message(user_id, "🔍 Получаю информацию о видео...")
         try:
             info = get_youtube_info_ydl(url)
+
+
+            if not info:
+                bot.send_message(user_id, "❌ Видео недоступно. Возможно, оно приватное или требует авторизацию.")
+                return
+
             user_mode[user_id] = {"mode": "youtube", "url": url, "info": info}
             generate_video_card(info, user_id)
         except Exception as e:
@@ -467,13 +531,7 @@ def handle_youtube_button(call):
             bot.send_video(user_id, video, timeout=120, caption=caption, parse_mode="HTML")
         print(Fore.GREEN + f"✅ Видео отправлено пользователю: {video_path}")
         bot.delete_message(user_id, user_msg.message_id)
-        log_download(
-            os.path.join("logs", "download_youtube_log.txt"),
-            call.from_user.first_name or "-",
-            call.from_user.username or "-",
-            user_id,
-            url
-        )
+        
     except Exception as e:
         bot.send_message(user_id, "❌ Ошибка при отправке видео.")
         print(Fore.RED + f"❌ Ошибка отправки: {e}")
@@ -540,9 +598,22 @@ def handle_youtube_mp3_button(call):
                 'preferredquality': '192',
             }]
         }
+        
+        # Проверяем существование файла cookies и добавляем его
+        cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
+        if os.path.exists(cookies_path):
+            ydl_opts['cookiefile'] = cookies_path
+        else:
+            print(Fore.YELLOW + f"⚠️ Файл cookies.txt не найден: {cookies_path}")
+            
+        # Добавляем user-agent для обхода блокировок
+        ydl_opts['http_headers'] = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
         from yt_dlp import YoutubeDL
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+        audio_path = None
         for filename in os.listdir(temp_dir):
             if filename.endswith('.mp3'):
                 audio_path = os.path.join(temp_dir, filename)
@@ -556,13 +627,7 @@ def handle_youtube_mp3_button(call):
             bot.send_audio(user_id, audio, timeout=120, caption=caption, parse_mode="HTML")
         print(Fore.GREEN + f"✅ Аудио отправлено пользователю: {audio_path}")
         bot.delete_message(user_id, user_msg.message_id)
-        log_download(
-            os.path.join("logs", "download_youtube_log.txt"),
-            call.from_user.first_name or "-",
-            call.from_user.username or "-",
-            user_id,
-            url
-        )
+
     except Exception as e:
         bot.send_message(user_id, "❌ Ошибка при отправке аудио.")
         print(Fore.RED + f"❌ Ошибка отправки аудио: {e}")
@@ -574,7 +639,7 @@ def handle_youtube_mp3_button(call):
             print(Fore.YELLOW + f"🧹 Временная папка удалена: {os.path.dirname(audio_path)}")
 
 def extract_mp3_from_video(video_path, mp3_path):
-    ffmpeg_path = os.path.abspath(os.path.join("lib", "ffmpeg-2025-06-16-git-e6fb8f373e-essentials_build", "bin", "ffmpeg.exe"))
+    ffmpeg_path = "ffmpeg"
     ffmpeg_args = [
         ffmpeg_path, '-y', '-i', video_path, '-vn', '-acodec', 'libmp3lame',
         '-ar', '44100', '-ac', '2', '-ab', '192k', '-f', 'mp3', mp3_path
@@ -781,7 +846,7 @@ def group_tiktok_instagram_handler(message):
             with open(video_path, "rb") as video_bytes:
                 bot.send_video(user_id, video_bytes, timeout=60, caption="🤖 Бот: @wndownloadbot", reply_to_message_id=message.message_id)
             # Извлечение mp3 через ffmpeg
-            ffmpeg_path = os.path.abspath(os.path.join("lib", "ffmpeg-2025-06-16-git-e6fb8f373e-essentials_build", "bin", "ffmpeg.exe"))
+            ffmpeg_path = "ffmpeg"
             ffmpeg_args = [
                 ffmpeg_path, '-y', '-i', video_path, '-vn', '-acodec', 'libmp3lame',
                 '-ar', '44100', '-ac', '2', '-ab', '192k', '-f', 'mp3', mp3_path
@@ -815,7 +880,7 @@ def group_tiktok_instagram_handler(message):
             with open(video_path, "rb") as video:
                 bot.send_video(user_id, video, timeout=60, caption="🤖 Бот: @wndownloadbot", reply_to_message_id=message.message_id)
             # Извлечение mp3 через ffmpeg
-            ffmpeg_path = os.path.abspath(os.path.join("lib", "ffmpeg-2025-06-16-git-e6fb8f373e-essentials_build", "bin", "ffmpeg.exe"))
+            ffmpeg_path = "ffmpeg"
             mp3_path = video_path + ".mp3"
             ffmpeg_args = [
                 ffmpeg_path, '-y', '-i', video_path, '-vn', '-acodec', 'libmp3lame',
@@ -840,6 +905,10 @@ def group_tiktok_instagram_handler(message):
 
 if __name__ == "__main__":
     try:
+        # Запускаем health check сервер в отдельном потоке для Render.com
+        health_thread = threading.Thread(target=start_health_server, daemon=True)
+        health_thread.start()
+        
         print(Fore.GREEN + "✅ Бот запущен и ждёт сообщений... 🧐")
         bot.polling(none_stop=True, timeout=90, long_polling_timeout=60)
     except KeyboardInterrupt:
